@@ -1,15 +1,26 @@
 import os
 import pandas as pd
 import numpy as np
+"""
+!note
+changes in the latest version
 
++add user id as a label(to use in training)
++remove timestamps(we dont ned timestmaps in ml training since we already downsmapled data to a common sampling rate)
++remove the frist and last row for data integrity(someone forget to put a "," for the first row)
++remove the "ibi" column from the merged file but keep the logic. so if needed i can also include it while training using "masking".
++The accelerometer is configured to measure acceleration in the range [-2g, 2g]. Therefore the unit in this file is 1/64g.So the ACC data is divided to 64. 
++Ensured that the naming of the columns is same with the SWEET dataset
+
+"""
 # common sampling rate in Hz
-COMMON_SAMPLING_RATE = 4
+COMMON_SAMPLING_RATE = 1
 
 # base directory containing all user folders
-BASE_DIR = r"C:\Users\user\Desktop\Yeni klasör (4)"
+BASE_DIR = r"C:\Users\user\Desktop\ECSMP DEMO\User Data"
 
 # output directory for merged files
-OUTPUT_DIR = r"C:\Users\user\Desktop\ECSMP TEST\merge"
+OUTPUT_DIR = r"C:\Users\user\Desktop\ECSMP DEMO\merge"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def process_acc(file_path, master_timestamps):
@@ -53,7 +64,11 @@ def process_acc(file_path, master_timestamps):
         # ----------- UPsampling or same rate -----------
         # Reindex to master_timestamps and interpolate
         final_df = acc_data.reindex(master_timestamps).interpolate().reset_index()
+        
         final_df.columns = ["timestamp", "x", "y", "z"]
+
+    # Divide ACC values by 64  The accelerometer is configured to measure acceleration in the range [-2g, 2g]. Therefore the unit in this file is 1/64g.
+    final_df[["x", "y", "z"]] = final_df[["x", "y", "z"]] / 64
 
     return final_df
 
@@ -186,9 +201,7 @@ def process_ibi(file_path, max_time, master_timestamps):
     ibi_resampled.columns = ["timestamp", "ibi"]
     return ibi_resampled
 
-
 def merge_data(user_dir):
-    
     # Paths
     acc_file = os.path.join(user_dir, "ACC.csv")
     temp_file = os.path.join(user_dir, "TEMP.csv")
@@ -196,7 +209,7 @@ def merge_data(user_dir):
     hr_file = os.path.join(user_dir, "HR.csv")
     ibi_file = os.path.join(user_dir, "IBI.csv")
 
-    #Load HR, find max_time
+    # Load HR, find max_time
     hr_data = pd.read_csv(hr_file, header=None, skiprows=2, names=["hr"])
     if hr_data.empty:
         print(f"Warning: {hr_file} empty. Skipping.")
@@ -214,17 +227,35 @@ def merge_data(user_dir):
     acc = process_acc(acc_file, master_timestamps)
     temp = process_temp(temp_file, master_timestamps)
     eda = process_eda(eda_file, master_timestamps)
-    hr  = process_hr(hr_file, master_timestamps)
-    ibi = process_ibi(ibi_file, max_time, master_timestamps)
+    hr = process_hr(hr_file, master_timestamps)
+    ibi = process_ibi(ibi_file, max_time, master_timestamps)  # Still process but don't include in final merge
 
-    # Merge all data on 'timestamp'
-    # Because they all have exactly the same timestamps, merging will be straightforward.
-    dfs = [acc, temp, eda, hr, ibi]
-    merged = acc  # start from ACC
+    # Merge only acc, temp, eda, and hr data
+    dfs = [acc, temp, eda, hr]
+    merged = acc  # Start with ACC
     for df in dfs[1:]:
         merged = pd.merge(merged, df, on="timestamp", how="outer")  # or 'inner' if you prefer
 
+    # Optional: Log IBI for debugging purposes
+    if not ibi.empty:
+        print(f"Processed IBI for {user_dir}, but not saving to merged file.")
+
+    # Rename columns
+    merged.rename(
+        columns={
+            "x": "ACC_x",
+            "y": "ACC_y",
+            "z": "ACC_z",
+            "temperature": "TEMP_Temp",
+            "eda": "GSR_GSR",
+            "hr": "DAYS_ECG_mean_heart_rate",
+        },
+        inplace=True,
+    )
+
     return merged
+
+
 
 
 def main():
@@ -234,11 +265,22 @@ def main():
             print(f"Processing user: {user_folder}")
             merged_data = merge_data(user_dir)
             if not merged_data.empty:
+                # Extract user ID from the folder name
+                user_id = int(user_folder.split("_")[0])  # Assuming the folder starts with the user number
+                # Add the user_id column
+                merged_data["user_id"] = user_id
+                # Drop the 'timestamp' column before saving
+                merged_data_no_timestamp = merged_data.drop(columns=["timestamp"])
+                # Exclude the first row and the last row
+                merged_data_no_timestamp = merged_data_no_timestamp.drop(index=[merged_data_no_timestamp.index[0], merged_data_no_timestamp.index[-1]])
+                # Save the updated merged data
                 output_path = os.path.join(OUTPUT_DIR, f"{user_folder}_merged.csv")
-                merged_data.to_csv(output_path, index=False)
-                print(f"Saved merged data for {user_folder}")
+                merged_data_no_timestamp.to_csv(output_path, index=False)
+                print(f"Saved merged data for {user_folder} (user_id: {user_id}) without second and last row")
             else:
                 print(f"No data to save for {user_folder}")
+
+
 
 
 if __name__ == "__main__":
